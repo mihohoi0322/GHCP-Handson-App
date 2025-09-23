@@ -1,48 +1,23 @@
-# コード規約（Coding Guidelines）
+# コードレビューガイドライン
+コードレビューに関して、以下のガイドラインに従ってください。
 
-## 大前提
-- 余計なコメントアウトはしないでください。
+## レビュー優先度
+1) セキュリティ 2) 正確性（型/境界） 3) Next.jsベストプラクティス 4) パフォーマンス/アクセシビリティ
 
-## 1. 基本方針
-- Next.js（App Router）+ TypeScript + Tailwind CSS を前提とします。
-- すべての新規コードはTypeScriptで記述してください。
-- 機能ごとに小さく、責任範囲の明確な関数・コンポーネントを作成してください。
-- Reactの最新ベストプラクティス（関数コンポーネント、Hooks等）を推奨します。
+## TypeScript
+- `strict` 前提・`any` 回避、必要時は `unknown`＋型ガード、設定オブジェクトは `satisfies` を活用。
+- public API はJSDocを付け、破壊的変更はCHANGELOGに記載。
 
-## 2. ファイル構成
-- `src/components/`：UIコンポーネント
-- `src/app/`：App Router用ページ
-- `src/lib/`, `src/utils/`：ユーティリティ
-- `src/types/`：型定義
-- `public/`：静的アセット
+## Next.js 基本
+- 既定は **Server Components**、`use client` は相互作用が必要な箇所のみ。:contentReference[oaicite:0]{index=0}
+- **データ取得はサーバ優先**、`fetch` の `cache`/`revalidate` を明示、無効化は `revalidatePath`/`revalidateTag` を使用。:contentReference[oaicite:1]{index=1}
 
-## 3. 命名規則
-- 変数・関数：キャメルケース（例：todoList, handleClick）
-- コンポーネント・型：パスカルケース（例：TodoItem, TodoFilter）
-- ファイル名：コンポーネント名と一致させる
+## 画像
+- 生 `<img>` ではなく **`next/image`** を使用し、`alt` と `sizes`（or `width/height`）を適切に設定。:contentReference[oaicite:2]{index=2}
+- 外部画像は `next.config.js` の `images.remotePatterns` に許可ドメインを登録。:contentReference[oaicite:3]{index=3}
 
-## 4. コメントアウト規則
-- **可視性・保守性向上のため、コメントは積極的に活用すること。**
-- 複雑なロジックや意図が伝わりにくい箇所には、JSDoc形式または行コメントで説明を加える。
-- コメントは最新状態を保ち、不要になったら必ず削除する。
-- コメントの書式：
-  - 行コメントは`//`、ブロックコメントは`/* ... */`を使用。
-  - JSDocは`/** ... */`で記述。
-  - コメントはコードの直上または同じ行に記載し、内容が明確になるよう簡潔に書く。
-- 一時的なデバッグやTODOは`// TODO:`や`// FIXME:`を明記し、後で必ず対応する。
-- コメントアウトの冒頭に用途に応じた絵文字を付けて可視性を高めること（例：// 📝 説明、// 🐞 デバッグ、// 🚩 注意点、// 🔥 一時対応 など）。**
+## セキュリティ
+- すべての入力をスキーマで検証、`dangerouslySetInnerHTML` は原則禁止、秘密情報はクライアントに露出させない。
 
-## 5. スタイル・書式
-- Tailwind CSSのユーティリティクラスを優先し、カスタムCSSは最小限に。
-- インデントはスペース2つ。
-- セミコロンは必須。
-- 1行の長さは120文字以内を目安とする。
-
-## 6. 型・Props
-- すべてのPropsや関数引数・戻り値に型を明示する。
-- 型定義は`src/types/`またはコンポーネントと同じディレクトリに配置。
-
-## 7. その他
-- ESLintで検出された警告・エラーは必ず修正する。
-- PR時は必ずテストを実行し、カバレッジを維持する。
-- パフォーマンス・SEOも考慮し、必要に応じて最適化を行う。
+## PR チェック
+- 変更理由/影響/テストをPR本文に記載、ESLint/型エラーは0、可能なら *Suggested changes* で具体案を提示。
