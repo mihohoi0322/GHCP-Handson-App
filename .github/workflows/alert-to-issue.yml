@@ -38,10 +38,14 @@ jobs:
         run: sleep 60
 
       - name: Fetch alerts and create issues
+        id: create-issues
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            // copilot assign 対象の Issue 番号を収集
+            var copilotIssues = [];
+
             // Code Scanning API で open アラートを取得
             // まずツール名フィルタなしで全アラートを取得し、デバッグ出力
             var alerts = [];
@@ -197,21 +201,9 @@ jobs:
               var issue = await github.rest.issues.create(createParams);
               console.log('Created issue #' + issue.data.number + ': ' + issueTitle);
 
-              // copilot assign を試行（Coding Agent が有効でない場合はスキップ）
+              // copilot assign 対象の Issue 番号を収集（後続ステップで PAT を使って assign）
               if (isCritHigh) {
-                try {
-                  await github.rest.issues.addAssignees({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issue.data.number,
-                    assignees: ['copilot'],
-                  });
-                  console.log('Assigned copilot to issue #' + issue.data.number);
-                } catch (assignErr) {
-                  console.log('WARNING: Could not assign copilot to issue #' + issue.data.number + ': ' + assignErr.message);
-                  console.log('Copilot Coding Agent may not be enabled for this repository.');
-                  console.log('You can manually assign copilot or use: gh issue edit ' + issue.data.number + ' --add-assignee copilot');
-                }
+                copilotIssues.push(issue.data.number);
               }
 
               existingBodies.push(issueBody);
@@ -219,3 +211,28 @@ jobs:
             }
 
             console.log('Done. Created: ' + createdCount + ', Skipped: ' + skippedCount);
+
+            // copilot assign 対象の Issue 番号を output に設定
+            if (copilotIssues.length > 0) {
+              core.setOutput('copilot_issues', copilotIssues.join(','));
+              console.log('Copilot assign targets: ' + copilotIssues.join(', '));
+            } else {
+              core.setOutput('copilot_issues', '');
+            }
+
+      # Copilot ライセンス保持ユーザーの PAT で @copilot をアサイン
+      # GITHUB_TOKEN ではライセンス不足により assign 不可のため PAT が必要
+      # 参考: https://zenn.dev/nuits_jp/articles/2025-12-11-assign-copilot-to-issue
+      - name: Assign Copilot to critical/high issues
+        if: ${{ steps.create-issues.outputs.copilot_issues != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_ASSIGN_PAT }}
+          COPILOT_ISSUES: ${{ steps.create-issues.outputs.copilot_issues }}
+        run: |
+          IFS=',' read -ra ISSUES <<< "$COPILOT_ISSUES"
+          for issue_num in "${ISSUES[@]}"; do
+            echo "Assigning @copilot to issue #${issue_num}..."
+            gh issue edit "${issue_num}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --add-assignee "@copilot" || echo "WARNING: Failed to assign copilot to #${issue_num}"
+          done
