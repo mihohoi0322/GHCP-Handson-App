@@ -136,7 +136,9 @@ jobs:
                 continue;
               }
 
-              var isCritHigh = (severity === 'critical' || severity === 'high');
+              // Semgrep severity: error/warning → copilot assign 対象に含める
+              // Code Scanning API: security_severity_level = critical/high/medium/low, severity = error/warning/note
+              var isCritHigh = (severity === 'critical' || severity === 'high' || severity === 'error');
               var emoji = isCritHigh ? '\uD83D\uDD34' : '\uD83D\uDFE1';
               var description = rule.description || 'N/A';
               var lineRange = (el !== sl) ? ('-L' + el) : '';
