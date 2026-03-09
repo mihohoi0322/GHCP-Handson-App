@@ -220,9 +220,9 @@ jobs:
               core.setOutput('copilot_issues', '');
             }
 
-      # Copilot ライセンス保持ユーザーの PAT で @copilot をアサイン
-      # GITHUB_TOKEN ではライセンス不足により assign 不可のため PAT が必要
-      # 参考: https://zenn.dev/nuits_jp/articles/2025-12-11-assign-copilot-to-issue
+      # Copilot Coding Agent を Issue にアサイン（REST API）
+      # 公式ドキュメント: https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/create-a-pr
+      # Fine-grained PAT に必要な権限: metadata(read), actions(r/w), contents(r/w), issues(r/w), pull_requests(r/w)
       - name: Assign Copilot to critical/high issues
         if: ${{ steps.create-issues.outputs.copilot_issues != '' }}
         env:
@@ -231,8 +231,19 @@ jobs:
         run: |
           IFS=',' read -ra ISSUES <<< "$COPILOT_ISSUES"
           for issue_num in "${ISSUES[@]}"; do
-            echo "Assigning @copilot to issue #${issue_num}..."
-            gh issue edit "${issue_num}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --add-assignee "@copilot" || echo "WARNING: Failed to assign copilot to #${issue_num}"
+            echo "Assigning copilot-swe-agent to issue #${issue_num} via REST API..."
+            gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/assignees" \
+              --input - <<EOF || echo "WARNING: Failed to assign copilot to #${issue_num}"
+          {
+            "assignees": ["copilot-swe-agent[bot]"],
+            "agent_assignment": {
+              "target_repo": "${GITHUB_REPOSITORY}",
+              "base_branch": "main"
+            }
+          }
+          EOF
           done
