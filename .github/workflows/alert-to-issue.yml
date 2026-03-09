@@ -1,24 +1,26 @@
 # Code Scanning アラート → Issue 自動起票 + Copilot Coding Agent assign
 #
-# トリガー: code_scanning_alert イベント（appeared_in_branch）
+# トリガー: workflow_run（Semgrep スキャン完了後）
 #
 # 処理:
-#   1. 新規 Code Scanning アラートを受信
-#   2. 重要度に応じてトリアージ:
+#   1. Semgrep スキャン完了を検知
+#   2. Code Scanning API で open アラート一覧を取得
+#   3. 重要度に応じてトリアージ:
 #      - Critical/High → Issue 作成 + copilot assign（自動修正）
 #      - Medium → Issue 作成 + security ラベル（手動レビュー）
-#      - Low/Note → ログ出力のみ
-#   3. Issue 本文に修正に必要なコンテキストを記載（= Agent へのプロンプト）
+#      - Low/Note → スキップ
+#   4. Issue 本文に修正に必要なコンテキストを記載（= Agent へのプロンプト）
 #
 # 前提:
 #   - リポジトリに `copilot` ユーザーが assign 可能であること
-#   - GITHUB_TOKEN の permissions で issues: write が必要
+#   - GITHUB_TOKEN の permissions で issues: write, security-events: read が必要
 
 name: Alert to Issue (Copilot Agent)
 
 on:
-  code_scanning_alert:
-    types: [appeared_in_branch]
+  workflow_run:
+    workflows: ["Semgrep SAST Scan"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -26,146 +28,170 @@ permissions:
   security-events: read
 
 jobs:
-  triage-and-create-issue:
-    name: Triage Alert & Create Issue
+  triage-and-create-issues:
+    name: Triage Alerts & Create Issues
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' }}
 
     steps:
-      - name: Triage and create issue
+      - name: Wait for Code Scanning to process SARIF
+        run: sleep 30
+
+      - name: Fetch alerts and create issues
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const alert = context.payload.alert;
-            const rule = alert.rule;
-            const severity = rule.security_severity_level || rule.severity || 'unknown';
-            const location = alert.most_recent_instance?.location;
-            const filePath = location?.path || 'unknown';
-            const startLine = location?.start_line || '?';
-            const endLine = location?.end_line || startLine;
-
-            console.log('Alert: ' + rule.id + ' | Severity: ' + severity + ' | File: ' + filePath + ':' + startLine);
-
-            // Low / Note はログのみ
-            if (['low', 'note'].includes(severity.toLowerCase())) {
-              console.log('Severity "' + severity + '" — skipping issue creation.');
+            // Code Scanning API で open アラートを取得（Semgrep のみ）
+            var alerts = [];
+            try {
+              var resp = await github.rest.codeScanning.listAlertsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                tool_name: 'Semgrep',
+                per_page: 100,
+              });
+              alerts = resp.data;
+            } catch (e) {
+              console.log('Failed to fetch code scanning alerts: ' + e.message);
+              console.log('This may happen if SARIF is still being processed. Try re-running.');
               return;
             }
 
-            // 重複チェック: 同じルールID + ファイルパスの Issue が既に存在しないか
-            const existingIssues = await github.rest.issues.listForRepo({
+            console.log('Found ' + alerts.length + ' open Semgrep alerts.');
+            if (alerts.length === 0) return;
+
+            // 既存 Issue を取得（重複チェック用）
+            var existingIssues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
               labels: 'security,code-scanning',
               per_page: 100,
             });
-
-            const duplicateTag = '<!-- alert:' + rule.id + ':' + filePath + ' -->';
-            const isDuplicate = existingIssues.data.some(
-              issue => issue.body && issue.body.includes(duplicateTag)
-            );
-
-            if (isDuplicate) {
-              console.log('Duplicate issue already exists for ' + rule.id + ' in ' + filePath + '. Skipping.');
-              return;
-            }
-
-            // Issue 本文を構築（= Copilot Coding Agent へのプロンプト）
-            const isCriticalOrHigh = ['critical', 'high'].includes(severity.toLowerCase());
-            const severityEmoji = isCriticalOrHigh ? '\uD83D\uDD34' : '\uD83D\uDFE1';
-            const lineRange = endLine !== startLine ? '-L' + endLine : '';
-            const description = rule.description || rule.full_description || 'N/A';
-            const alertLink = alert.html_url ? '- [Code Scanning アラート詳細](' + alert.html_url + ')' : '';
-            const ruleName = rule.name || rule.id;
-
-            const lines = [
-              duplicateTag,
-              '',
-              '## ' + severityEmoji + ' セキュリティ脆弱性: ' + ruleName,
-              '',
-              '**重要度**: ' + severity.toUpperCase(),
-              '**検出ルール**: `' + rule.id + '`',
-              '**ファイル**: `' + filePath + '` (L' + startLine + lineRange + ')',
-              '**説明**: ' + description,
-              '',
-              '### 修正依頼',
-              '',
-              '以下のセキュリティ脆弱性を修正してください。',
-              '',
-              '1. **問題箇所**: `' + filePath + '` の ' + startLine + ' 行目付近',
-              '2. **脆弱性タイプ**: ' + ruleName,
-              '3. **修正方針**:',
-              '   - 入力値のバリデーション/サニタイズを追加',
-              '   - セキュアなAPIやライブラリに置き換え',
-              '   - ハードコードされた秘密情報は環境変数に移行',
-              '   - 既存のテストが壊れないように注意',
-              '',
-              '### 参考情報',
-              '',
-              '- SARIF ルール: ' + rule.id,
-              '- [OWASP Top 10](https://owasp.org/www-project-top-ten/)',
-              alertLink,
-              '',
-              '### 期待される修正',
-              '',
-              '- [ ] 脆弱性が解消されていること',
-              '- [ ] 既存の機能が壊れていないこと',
-              '- [ ] 新しいテストが追加されていること（可能であれば）',
-            ];
-            const issueBody = lines.join('\n');
+            var existingBodies = existingIssues.data.map(function(i) { return i.body || ''; });
 
             // ラベルの確保
-            const labels = ['security', 'code-scanning'];
-            if (isCriticalOrHigh) {
-              labels.push('copilot-fix');
-            }
-
-            for (const label of labels) {
+            var labelDefs = [
+              { name: 'security', color: 'e11d48', desc: 'Security vulnerability' },
+              { name: 'code-scanning', color: '7c3aed', desc: 'Detected by code scanning' },
+              { name: 'copilot-fix', color: '2563eb', desc: 'Copilot Coding Agent に自動修正を依頼' }
+            ];
+            for (var ld = 0; ld < labelDefs.length; ld++) {
               try {
                 await github.rest.issues.getLabel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  name: label,
+                  name: labelDefs[ld].name,
                 });
-              } catch {
-                // ラベルが存在しない場合は作成
-                const colors = {
-                  'security': 'e11d48',
-                  'code-scanning': '7c3aed',
-                  'copilot-fix': '2563eb',
-                };
+              } catch (e) {
                 await github.rest.issues.createLabel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  name: label,
-                  color: colors[label] || 'cccccc',
-                  description: label === 'copilot-fix'
-                    ? 'Copilot Coding Agent に自動修正を依頼'
-                    : 'Auto-created for ' + label,
+                  name: labelDefs[ld].name,
+                  color: labelDefs[ld].color,
+                  description: labelDefs[ld].desc,
                 });
               }
             }
 
-            // Issue 作成
-            const issueTitle = '[Security] ' + severity.toUpperCase() + ': ' + (rule.name || rule.id) + ' in ' + filePath;
-            
-            const createParams = {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: issueTitle,
-              body: issueBody,
-              labels: labels,
-            };
+            var createdCount = 0;
+            var skippedCount = 0;
 
-            // Critical/High の場合は copilot に assign
-            if (isCriticalOrHigh) {
-              createParams.assignees = ['copilot'];
+            for (var i = 0; i < alerts.length; i++) {
+              var alert = alerts[i];
+              var rule = alert.rule;
+              var ruleId = rule.id || 'unknown';
+              var severity = rule.security_severity_level || rule.severity || 'unknown';
+              var location = alert.most_recent_instance && alert.most_recent_instance.location ? alert.most_recent_instance.location : {};
+              var fp = location.path || 'unknown';
+              var sl = location.start_line || '?';
+              var el = location.end_line || sl;
+
+              // Low / Note はスキップ
+              if (severity === 'low' || severity === 'note') {
+                skippedCount++;
+                continue;
+              }
+
+              // 重複チェック
+              var dupTag = '<!-- alert:' + ruleId + ':' + fp + ' -->';
+              var isDup = false;
+              for (var ei = 0; ei < existingBodies.length; ei++) {
+                if (existingBodies[ei].indexOf(dupTag) !== -1) {
+                  isDup = true;
+                  break;
+                }
+              }
+              if (isDup) {
+                console.log('Skip duplicate: ' + ruleId + ' in ' + fp);
+                skippedCount++;
+                continue;
+              }
+
+              var isCritHigh = (severity === 'critical' || severity === 'high');
+              var emoji = isCritHigh ? '\uD83D\uDD34' : '\uD83D\uDFE1';
+              var description = rule.description || 'N/A';
+              var lineRange = (el !== sl) ? ('-L' + el) : '';
+              var alertLink = alert.html_url ? '- [Code Scanning アラート詳細](' + alert.html_url + ')' : '';
+              var ruleName = rule.name || ruleId;
+
+              var lines = [
+                dupTag,
+                '',
+                '## ' + emoji + ' セキュリティ脆弱性: ' + ruleName,
+                '',
+                '**重要度**: ' + severity.toUpperCase(),
+                '**検出ルール**: `' + ruleId + '`',
+                '**ファイル**: `' + fp + '` (L' + sl + lineRange + ')',
+                '**説明**: ' + description,
+                '',
+                '### 修正依頼',
+                '',
+                '以下のセキュリティ脆弱性を修正してください。',
+                '',
+                '1. **問題箇所**: `' + fp + '` の ' + sl + ' 行目付近',
+                '2. **脆弱性タイプ**: ' + ruleName,
+                '3. **修正方針**:',
+                '   - 入力値のバリデーション/サニタイズを追加',
+                '   - セキュアなAPIやライブラリに置き換え',
+                '   - ハードコードされた秘密情報は環境変数に移行',
+                '   - 既存のテストが壊れないように注意',
+                '',
+                '### 参考情報',
+                '',
+                '- SARIF ルール: ' + ruleId,
+                '- [OWASP Top 10](https://owasp.org/www-project-top-ten/)',
+                alertLink,
+                '',
+                '### 期待される修正',
+                '',
+                '- [ ] 脆弱性が解消されていること',
+                '- [ ] 既存の機能が壊れていないこと',
+                '- [ ] 新しいテストが追加されていること（可能であれば）',
+              ];
+              var issueBody = lines.join('\n');
+              var issueTitle = '[Security] ' + severity.toUpperCase() + ': ' + ruleName + ' in ' + fp;
+
+              var labels = ['security', 'code-scanning'];
+              if (isCritHigh) labels.push('copilot-fix');
+
+              var createParams = {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: issueBody,
+                labels: labels,
+              };
+              if (isCritHigh) {
+                createParams.assignees = ['copilot'];
+              }
+
+              var issue = await github.rest.issues.create(createParams);
+              console.log('Created issue #' + issue.data.number + ': ' + issueTitle);
+              existingBodies.push(issueBody);
+              createdCount++;
             }
 
-            const issue = await github.rest.issues.create(createParams);
-            console.log('Created issue #' + issue.data.number + ': ' + issueTitle);
-            
-            if (isCriticalOrHigh) {
-              console.log('Assigned to copilot for automatic fix.');
-            }
+            console.log('Done. Created: ' + createdCount + ', Skipped: ' + skippedCount);
