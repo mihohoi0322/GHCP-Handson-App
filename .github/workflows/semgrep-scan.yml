@@ -50,7 +50,7 @@ jobs:
         # || true: スキャン結果に関わらず後続ステップを実行（アラートを登録するため）
 
       - name: Upload SARIF to Code Scanning
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: semgrep-results.sarif

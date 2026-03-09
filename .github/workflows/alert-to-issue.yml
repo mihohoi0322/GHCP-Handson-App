@@ -44,11 +44,11 @@ jobs:
             const startLine = location?.start_line || '?';
             const endLine = location?.end_line || startLine;
 
-            console.log(`Alert: ${rule.id} | Severity: ${severity} | File: ${filePath}:${startLine}`);
+            console.log('Alert: ' + rule.id + ' | Severity: ' + severity + ' | File: ' + filePath + ':' + startLine);
 
             // Low / Note はログのみ
             if (['low', 'note'].includes(severity.toLowerCase())) {
-              console.log(`Severity "${severity}" — skipping issue creation.`);
+              console.log('Severity "' + severity + '" — skipping issue creation.');
               return;
             }
 
@@ -61,53 +61,59 @@ jobs:
               per_page: 100,
             });
 
-            const duplicateTag = `<!-- alert:${rule.id}:${filePath} -->`;
+            const duplicateTag = '<!-- alert:' + rule.id + ':' + filePath + ' -->';
             const isDuplicate = existingIssues.data.some(
               issue => issue.body && issue.body.includes(duplicateTag)
             );
 
             if (isDuplicate) {
-              console.log(`Duplicate issue already exists for ${rule.id} in ${filePath}. Skipping.`);
+              console.log('Duplicate issue already exists for ' + rule.id + ' in ' + filePath + '. Skipping.');
               return;
             }
 
             // Issue 本文を構築（= Copilot Coding Agent へのプロンプト）
             const isCriticalOrHigh = ['critical', 'high'].includes(severity.toLowerCase());
-            const severityEmoji = isCriticalOrHigh ? '🔴' : '🟡';
+            const severityEmoji = isCriticalOrHigh ? '\uD83D\uDD34' : '\uD83D\uDFE1';
+            const lineRange = endLine !== startLine ? '-L' + endLine : '';
+            const description = rule.description || rule.full_description || 'N/A';
+            const alertLink = alert.html_url ? '- [Code Scanning アラート詳細](' + alert.html_url + ')' : '';
+            const ruleName = rule.name || rule.id;
 
-            const issueBody = `${duplicateTag}
-            
-## ${severityEmoji} セキュリティ脆弱性: ${rule.name || rule.id}
-
-**重要度**: ${severity.toUpperCase()}
-**検出ルール**: \`${rule.id}\`
-**ファイル**: \`${filePath}\` (L${startLine}${endLine !== startLine ? `-L${endLine}` : ''})
-**説明**: ${rule.description || rule.full_description || 'N/A'}
-
-### 修正依頼
-
-以下のセキュリティ脆弱性を修正してください。
-
-1. **問題箇所**: \`${filePath}\` の ${startLine} 行目付近
-2. **脆弱性タイプ**: ${rule.name || rule.id}
-3. **修正方針**:
-   - 入力値のバリデーション/サニタイズを追加
-   - セキュアなAPIやライブラリに置き換え
-   - ハードコードされた秘密情報は環境変数に移行
-   - 既存のテストが壊れないように注意
-
-### 参考情報
-
-- SARIF ルール: ${rule.id}
-- [OWASP Top 10](https://owasp.org/www-project-top-ten/)
-${alert.html_url ? `- [Code Scanning アラート詳細](${alert.html_url})` : ''}
-
-### 期待される修正
-
-- [ ] 脆弱性が解消されていること
-- [ ] 既存の機能が壊れていないこと  
-- [ ] 新しいテストが追加されていること（可能であれば）
-`;
+            const lines = [
+              duplicateTag,
+              '',
+              '## ' + severityEmoji + ' セキュリティ脆弱性: ' + ruleName,
+              '',
+              '**重要度**: ' + severity.toUpperCase(),
+              '**検出ルール**: `' + rule.id + '`',
+              '**ファイル**: `' + filePath + '` (L' + startLine + lineRange + ')',
+              '**説明**: ' + description,
+              '',
+              '### 修正依頼',
+              '',
+              '以下のセキュリティ脆弱性を修正してください。',
+              '',
+              '1. **問題箇所**: `' + filePath + '` の ' + startLine + ' 行目付近',
+              '2. **脆弱性タイプ**: ' + ruleName,
+              '3. **修正方針**:',
+              '   - 入力値のバリデーション/サニタイズを追加',
+              '   - セキュアなAPIやライブラリに置き換え',
+              '   - ハードコードされた秘密情報は環境変数に移行',
+              '   - 既存のテストが壊れないように注意',
+              '',
+              '### 参考情報',
+              '',
+              '- SARIF ルール: ' + rule.id,
+              '- [OWASP Top 10](https://owasp.org/www-project-top-ten/)',
+              alertLink,
+              '',
+              '### 期待される修正',
+              '',
+              '- [ ] 脆弱性が解消されていること',
+              '- [ ] 既存の機能が壊れていないこと',
+              '- [ ] 新しいテストが追加されていること（可能であれば）',
+            ];
+            const issueBody = lines.join('\n');
 
             // ラベルの確保
             const labels = ['security', 'code-scanning'];
@@ -136,13 +142,13 @@ ${alert.html_url ? `- [Code Scanning アラート詳細](${alert.html_url})` : '
                   color: colors[label] || 'cccccc',
                   description: label === 'copilot-fix'
                     ? 'Copilot Coding Agent に自動修正を依頼'
-                    : `Auto-created for ${label}`,
+                    : 'Auto-created for ' + label,
                 });
               }
             }
 
             // Issue 作成
-            const issueTitle = `[Security] ${severity.toUpperCase()}: ${rule.name || rule.id} in ${filePath}`;
+            const issueTitle = '[Security] ' + severity.toUpperCase() + ': ' + (rule.name || rule.id) + ' in ' + filePath;
             
             const createParams = {
               owner: context.repo.owner,
@@ -158,8 +164,8 @@ ${alert.html_url ? `- [Code Scanning アラート詳細](${alert.html_url})` : '
             }
 
             const issue = await github.rest.issues.create(createParams);
-            console.log(`Created issue #${issue.data.number}: ${issueTitle}`);
+            console.log('Created issue #' + issue.data.number + ': ' + issueTitle);
             
             if (isCriticalOrHigh) {
-              console.log(`Assigned to copilot for automatic fix.`);
+              console.log('Assigned to copilot for automatic fix.');
             }
