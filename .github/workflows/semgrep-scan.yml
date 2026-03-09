@@ -8,6 +8,7 @@
 # 処理:
 #   1. Semgrep でスキャン → SARIF ファイル生成
 #   2. SARIF を GitHub Code Scanning にアップロード
+#   3. Code Scanning アラートが登録されると alert-to-issue.yml が自動起動
 #
 # 前提: リポジトリで Code Scanning (GHAS) が有効であること
 
