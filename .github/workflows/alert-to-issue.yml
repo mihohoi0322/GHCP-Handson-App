@@ -185,6 +185,7 @@ jobs:
               var labels = ['security', 'code-scanning'];
               if (isCritHigh) labels.push('copilot-fix');
 
+              // まず Issue を作成（assignees なし — copilot assign は別ステップ）
               var createParams = {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -192,12 +193,27 @@ jobs:
                 body: issueBody,
                 labels: labels,
               };
-              if (isCritHigh) {
-                createParams.assignees = ['copilot'];
-              }
 
               var issue = await github.rest.issues.create(createParams);
               console.log('Created issue #' + issue.data.number + ': ' + issueTitle);
+
+              // copilot assign を試行（Coding Agent が有効でない場合はスキップ）
+              if (isCritHigh) {
+                try {
+                  await github.rest.issues.addAssignees({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.data.number,
+                    assignees: ['copilot'],
+                  });
+                  console.log('Assigned copilot to issue #' + issue.data.number);
+                } catch (assignErr) {
+                  console.log('WARNING: Could not assign copilot to issue #' + issue.data.number + ': ' + assignErr.message);
+                  console.log('Copilot Coding Agent may not be enabled for this repository.');
+                  console.log('You can manually assign copilot or use: gh issue edit ' + issue.data.number + ' --add-assignee copilot');
+                }
+              }
+
               existingBodies.push(issueBody);
               createdCount++;
             }
